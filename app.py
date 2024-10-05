@@ -1,76 +1,165 @@
-import streamlit as st
 import pandas as pd
-import seaborn as sns
+import numpy as np
+import joblib
+import streamlit as st
 import matplotlib.pyplot as plt
-import plotly.express as px
-from sklearn.datasets import load_iris
+import seaborn as sns
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+import plotly.express as px
 
-
-
-# Load the Iris dataset
+# Load data
+@st.cache_data  # Cache data to speed up loading
 def load_data():
-    data=pd.read_csv('train.csv')
-    return data
-df=load_data()
+    df = pd.read_csv('train.csv')  # Ganti dengan nama dataset Anda
+    return df
 
-# Streamlit app layout
-st.title("Aplikasi visualisasi pemesanan hotel")
-st.write("""
-### Ini adalah apliasi streamlit yang menggunakan dataset pemesanan yang sudah clean
-""")
+# Preprocessing
+def preprocess_data(df):
+    # Simpan salinan dari dataframe asli untuk visualisasi
+    df_visualization = df.copy()
 
-st.write("Data yang sudah dibersihkan:")
-st.write(df.head())
+    # Convert to datetime
+    df['reservation_status_date'] = pd.to_datetime(df['reservation_status_date'])
 
-# Sidebar for user input
-st.sidebar.header("User Input Parameters")
-def user_input_features():
-    lead_time=st.sidebar.slider("Load Time",0,365,100)
-    stay_in_weeken_night=st.sidebar.slider("Stays in weekend Night",0,10,2)
-    stays_in_week_nights=st.sidebar.slider("Stay in week night",0,15,5)
-    adult=st.sidebar.slider("Adult",1,4,2)
-    children=st.sidebar.slider("Children",0,5,1)
-    babies=st.sidebar.slider("Babies",0,3,0)
-    previous_cancellations=st.sidebar.slider("Previous Cancellations",0,5,0)
-    adr=st.sidebar.slider("Average Daily Rate",0.0,500.0,100.0)
+    # Handle missing values
+    df.drop(['company'], axis='columns', inplace=True)
+    df['children'].fillna(df['children'].median(), inplace=True)
+    df['agent'].fillna(df['agent'].median(), inplace=True)
+    df['country'].fillna(df['country'].mode()[0], inplace=True)
 
-    data={
-        'lead_time':lead_time,
-        'stays_in_weekend_night':stay_in_weeken_night,
-        'stays_in_week_nights':stays_in_week_nights,
-        'adult':adult,
-        'children':children,
-        'babies':babies,
-        'previous_cancellastion':previous_cancellations,
-        'adr':adr
-    }
-    return pd.DataFrame(data,index=[0])
-input_df=user_input_features()
+    # Drop unnecessary columns for modeling
+    columns_to_drop = ['reservation_status_date', 'bookingID', 'reservation_status', 'arrival_date_month', 'date']
+    df.drop(columns=columns_to_drop, inplace=True, errors='ignore')  # Use errors='ignore'
 
-#show input parameters
-st.subheader("User Input Parameter")
-st.write(input_df)
+    # Encode categorical columns
+    label_encoder = LabelEncoder()
 
-#Visualisasi
-#ADR by hotel type
-st.subheader("Rata-rata Tarif Harian(ADR) berdasarkan Jenis Hotel")
-fig=px.bar(df,x='hotel',y='adr',color='hotel',title='Rata-rata tarif harian')
-st.plotly_chart(fig)
-#scater plot lead time vs ADR
-st.subheader("Lead Time vs Tarif Harian")
-fig2=px.scatter(df,x='lead_time',y='adr',color='hotel',title='Lead Time vs Tarif Harian')
-st.plotly_chart(fig2)
+    # Encode columns that exist
+    if 'season' in df.columns:
+        df['season'] = label_encoder.fit_transform(df['season'])
 
-#Prepare data for Machine Learning
-df_ml=df[['lead_time', 'stays_in_weekend_nights', 'stays_in_week_nights', 'adults', 'children', 'babies', 'previous_cancellations', 'adr', 'is_canceled']]
-x=df_ml.drop('is_canceled',axis=1)
-y=df_ml['is_canceked']
+    df['deposit_type'] = label_encoder.fit_transform(df['deposit_type'])
+    df['customer_type'] = label_encoder.fit_transform(df['customer_type'])
 
-#split data into training and testing sets
-x_train, x_test, y_train, y_test= train_test_split(x,y,test_size=0.3,random_state=42)
+    column_to_encode = ['hotel', 'meal', 'country', 'market_segment', 'distribution_channel', 'reserved_room_type', 'assigned_room_type']
+    for col in column_to_encode:
+        df[col] = df[col].astype(str)
 
-model=Ran
+    df_encoded = pd.get_dummies(df, columns=column_to_encode, drop_first=True, dtype=int)
 
+    return df_encoded, df_visualization
+
+# Train model
+@st.cache_resource  # Cache the model for later use
+def train_model(df_encoded):
+    X = df_encoded.drop(columns=['is_canceled'])  # Features
+    y = df_encoded['is_canceled'].astype(int)  # Target
+
+    # Split the data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+    # Standardize numerical features
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    # Train Random Forest model
+    model = RandomForestClassifier(random_state=42)
+    model.fit(X_train, y_train)
+
+    return model, scaler
+
+# Load data
+df = load_data()
+
+# Periksa kolom dalam dataset
+st.write("Kolom dalam dataset:", df.columns.tolist())
+
+# Preprocess data
+df_encoded, df_visualization = preprocess_data(df)
+
+# Train the model
+model, scaler = train_model(df_encoded)
+
+# Streamlit app
+st.title("Hotel Reservation Cancellation Prediction")
+
+# Tab untuk visualisasi dan fitur prediksi
+tab1, tab2 = st.tabs(["Visualisasi", "Prediksi"])
+
+# Tab Visualisasi
+with tab1:
+    st.subheader("Visualisasi Data")
+
+    # Visualisasi 1: Distribusi lead_time berdasarkan status pembatalan
+    fig1 = px.histogram(df_visualization, x='lead_time', color='is_canceled', title='Distribusi Lead Time Berdasarkan Status Pembatalan',
+                         color_discrete_map={'0': 'green', '1': 'red'})  # Mengatur warna untuk status pembatalan
+    st.plotly_chart(fig1)
+
+    # Visualisasi 2: Segmen Pasar vs Pembatalan menggunakan Seaborn
+    plt.figure(figsize=(10, 6))
+    df_visualization['is_canceled'] = df_visualization['is_canceled'].astype(str)  # Mengkonversi ke string
+
+    # Mengatur warna berdasarkan status pembatalan
+    color_map = {"0": "green", "1": "red"}
+    sns.countplot(x='market_segment', hue='is_canceled', data=df_visualization, palette=color_map)
+    
+    plt.title('Segmen Pasar vs Pembatalan')
+    plt.legend(title='Status Pembatalan', loc='upper right')
+    plt.xticks(rotation=45)
+
+    # Menampilkan plot Matplotlib dalam Streamlit
+    st.pyplot(plt)
+
+# Tab Prediksi
+with tab2:
+    st.subheader("Fitur Prediksi")
+
+    # Sidebar for user inputs
+    def user_input_features():
+        hotel = st.selectbox("Hotel", ("City Hotel", "Resort Hotel"))
+        lead_time = st.slider("Lead Time", 0, 500, 30)
+        arrival_date_week_number = st.slider("Arrival Date Week Number", 1, 53, 25)
+        number_of_adults = st.slider("Number of Adults", 0, 30, 2)
+        number_of_children = st.slider("Number of Children", 0, 30, 0)
+        number_of_special_requests = st.slider("Number of Special Requests", 0, 5, 0)
+
+        data = {
+            'hotel': hotel,
+            'lead_time': lead_time,
+            'arrival_date_week_number': arrival_date_week_number,
+            'number_of_adults': number_of_adults,
+            'number_of_children': number_of_children,
+            'number_of_special_requests': number_of_special_requests
+        }
+
+        return pd.DataFrame(data, index=[0])
+
+    # Get user input
+    input_data = user_input_features()
+
+    # Transform the input data
+    input_data_encoded = pd.get_dummies(input_data, drop_first=True)
+
+    # Ensure input_data_encoded has the same columns as training data
+    missing_cols = set(df_encoded.columns) - set(input_data_encoded.columns)
+    for col in missing_cols:
+        input_data_encoded[col] = 0  # Add missing columns with value 0
+
+    input_data_encoded = input_data_encoded[df_encoded.columns.drop('is_canceled')]
+
+    # Standardize input data
+    input_data_scaled = scaler.transform(input_data_encoded)
+
+    # Predicting
+    prediction = model.predict(input_data_scaled)
+    prediction_proba = model.predict_proba(input_data_scaled)
+
+    # Display results
+    st.subheader('Prediction')
+    st.write('Cancelled' if prediction[0] == 1 else 'Not Cancelled')
+
+    st.subheader('Prediction Probability')
+    st.write(prediction_proba)

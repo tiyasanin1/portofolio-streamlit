@@ -4,10 +4,10 @@ import joblib
 import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
-import plotly.express as px
 
 # Load data
 @st.cache_data  # Cache data to speed up loading
@@ -17,38 +17,27 @@ def load_data():
 
 # Preprocessing
 def preprocess_data(df):
-    # Simpan salinan dari dataframe asli untuk visualisasi
     df_visualization = df.copy()
-
-    # Convert to datetime
     df['reservation_status_date'] = pd.to_datetime(df['reservation_status_date'])
-
-    # Handle missing values
     df.drop(['company'], axis='columns', inplace=True)
     df['children'].fillna(df['children'].median(), inplace=True)
     df['agent'].fillna(df['agent'].median(), inplace=True)
     df['country'].fillna(df['country'].mode()[0], inplace=True)
 
-    # Drop unnecessary columns for modeling
     columns_to_drop = ['reservation_status_date', 'bookingID', 'reservation_status', 'arrival_date_month', 'date']
-    df.drop(columns=columns_to_drop, inplace=True, errors='ignore')  # Use errors='ignore'
+    df.drop(columns=columns_to_drop, inplace=True, errors='ignore')
 
-    # Encode categorical columns
     label_encoder = LabelEncoder()
-
-    # Encode columns that exist
     if 'season' in df.columns:
         df['season'] = label_encoder.fit_transform(df['season'])
-
     df['deposit_type'] = label_encoder.fit_transform(df['deposit_type'])
     df['customer_type'] = label_encoder.fit_transform(df['customer_type'])
-
+    
     column_to_encode = ['hotel', 'meal', 'country', 'market_segment', 'distribution_channel', 'reserved_room_type', 'assigned_room_type']
     for col in column_to_encode:
         df[col] = df[col].astype(str)
 
     df_encoded = pd.get_dummies(df, columns=column_to_encode, drop_first=True, dtype=int)
-
     return df_encoded, df_visualization
 
 # Train model
@@ -57,15 +46,11 @@ def train_model(df_encoded):
     X = df_encoded.drop(columns=['is_canceled'])  # Features
     y = df_encoded['is_canceled'].astype(int)  # Target
 
-    # Split the data
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-
-    # Standardize numerical features
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
 
-    # Train Random Forest model
     model = RandomForestClassifier(random_state=42)
     model.fit(X_train, y_train)
 
@@ -73,14 +58,7 @@ def train_model(df_encoded):
 
 # Load data
 df = load_data()
-
-# Periksa kolom dalam dataset
-st.write("Kolom dalam dataset:", df.columns.tolist())
-
-# Preprocess data
 df_encoded, df_visualization = preprocess_data(df)
-
-# Train the model
 model, scaler = train_model(df_encoded)
 
 # Streamlit app
@@ -98,21 +76,29 @@ with tab1:
                          color_discrete_map={'0': 'green', '1': 'red'})  # Mengatur warna untuk status pembatalan
     st.plotly_chart(fig1)
 
-    # Visualisasi 2: Segmen Pasar vs Pembatalan menggunakan Seaborn
-    plt.figure(figsize=(10, 6))
-    df_visualization['is_canceled'] = df_visualization['is_canceled'].astype(str)  # Mengkonversi ke string
+    # Visualisasi 2: Segmen Pasar vs Pembatalan menggunakan Plotly
+    # Menyiapkan data untuk stacked bar chart
+    segmentation_cancellation = df_visualization.groupby(['market_segment', 'is_canceled']).size().reset_index(name='count')
 
-    # Mengatur warna berdasarkan status pembatalan
-    color_map = {"0": "green", "1": "red"}
-    sns.countplot(x='market_segment', hue='is_canceled', data=df_visualization, palette=color_map)
-    
-    plt.title('Segmen Pasar vs Pembatalan')
-    plt.legend(title='Status Pembatalan', loc='upper right')
-    plt.xticks(rotation=45)
+    # Menghitung total untuk setiap market_segment
+    total_counts = segmentation_cancellation.groupby('market_segment')['count'].sum().reset_index()
 
-    # Menampilkan plot Matplotlib dalam Streamlit
-    st.pyplot(plt)
+    # Menggabungkan total_counts dengan segmentation_cancellation untuk sorting
+    segmentation_cancellation = segmentation_cancellation.merge(total_counts, on='market_segment', suffixes=('', '_total'))
 
+    # Mengurutkan berdasarkan total_counts
+    segmentation_cancellation = segmentation_cancellation.sort_values(by='count_total', ascending=False)
+
+    # Menggunakan plotly untuk stacked bar chart
+    fig2 = px.bar(segmentation_cancellation, 
+                x='market_segment', 
+                y='count', 
+                color='is_canceled', 
+                title='Segmen Pasar vs Pembatalan',
+                color_discrete_map={'0': 'green', '1': 'red'},
+                barmode='stack')
+
+    st.plotly_chart(fig2)
 # Tab Prediksi
 with tab2:
     st.subheader("Fitur Prediksi")
